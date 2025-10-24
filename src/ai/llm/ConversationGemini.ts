@@ -15,6 +15,7 @@ import {
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import isFullSentence from "@utils/isFullSentence";
 import isFullXMLToolCall from "@utils/isFullXMLToolCall";
+import errorHandler from "@utils/ErrorHandler";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ConversationGeminiOptions
@@ -187,12 +188,25 @@ class ConversationGemini {
       if (!server) {
         return {
           functionName: tool.functionName,
-          response: "Cannot call tool",
+          response: "Tool not found in active MCP servers",
         };
       }
-      const response = await server.server.callTool(
-        tool.functionName,
-        tool.parameters
+
+      // Retry tool calls with exponential backoff (network errors, rate limits, timeouts)
+      const response = await errorHandler.retry(
+        () => server.server.callTool(tool.functionName, tool.parameters),
+        {
+          operation: 'mcp_tool_call',
+          component: 'ConversationGemini',
+          metadata: { toolName: tool.functionName, server: server.name },
+        },
+        {
+          maxRetries: 3,
+          baseDelay: 1000,
+          onRetry: (attempt, delay) => {
+            console.log(`[ConversationGemini] Retrying tool call "${tool.functionName}" (${attempt}/3) in ${delay}ms`);
+          },
+        }
       );
 
       const textResponse = response.content
@@ -235,9 +249,19 @@ class ConversationGemini {
         response: textResponse,
       };
     } catch (e) {
+      // Handle error with production-grade error handler
+      const error = e instanceof Error ? e : new Error(String(e));
+      const event = errorHandler.handle(error, {
+        operation: 'mcp_tool_call',
+        component: 'ConversationGemini',
+        metadata: { toolName: tool.functionName },
+      });
+
+      // Return user-friendly error message
+      const userMessage = errorHandler.getUserMessage(event);
       return {
         functionName: tool.functionName,
-        response: `Could not call tool: ${JSON.stringify(e)}`,
+        response: `Tool execution failed: ${userMessage}`,
       };
     }
   };
@@ -308,11 +332,28 @@ Response: ${resp.response}`
 
     //await new Promise((resolve) => window.setTimeout(resolve, 1000));
 
-    // Use Gemini streaming
-    const result = await this.chat.sendMessageStream(prompt);
+    // Use Gemini streaming with automatic retry on network errors, rate limits, and timeouts
+    const result = await errorHandler.retry(
+      () => this.chat.sendMessageStream(prompt),
+      {
+        operation: 'gemini_api_call',
+        component: 'ConversationGemini',
+        metadata: { model: this.modelName, promptLength: prompt.length },
+      },
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        maxDelay: 10000,
+        onRetry: (attempt, delay) => {
+          console.log(`[ConversationGemini] Retrying Gemini API call (${attempt}/3) in ${delay}ms`);
+        },
+      }
+    );
+
     let reply = "";
 
-    for await (const chunk of result.stream) {
+    try {
+      for await (const chunk of result.stream) {
       const chunkText = chunk.text();
       reply += chunkText;
 
@@ -359,6 +400,18 @@ Response: ${resp.response}`
               : message.messageParts,
         }));
       }
+    }
+    } catch (streamError) {
+      // Handle streaming errors (network interruptions, etc.)
+      const error = streamError instanceof Error ? streamError : new Error(String(streamError));
+      errorHandler.handle(error, {
+        operation: 'gemini_stream_processing',
+        component: 'ConversationGemini',
+        metadata: { model: this.modelName, partialReply: reply.substring(0, 100) },
+      });
+
+      // If stream fails, return whatever we got so far
+      console.error('[ConversationGemini] Stream processing error, returning partial response');
     }
 
     return {

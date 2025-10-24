@@ -12,6 +12,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 
 import ImageToText from "../imageToText/ImageToText";
+import { useInterruption } from "../interruption/useInterruption";
 import Conversation from "../llm/Conversation";
 import useMcpServer from "../mcp/react/useMcpServer";
 import SpeechToText from "../speechToText/SpeechToText";
@@ -19,6 +20,7 @@ import Kokoro from "../textToSpeech/kokoro/Kokoro";
 import { Message, MessagePartType, MessageRole, MessageUser } from "../types";
 import VoiceActivityDetection from "../voiceActivityDetection/VoiceActivityDetection";
 import { VoiceActivityDetectionStatus } from "../voiceActivityDetection/types";
+import { useConversationPersistence } from "@utils/useConversationPersistence";
 import AgentContext, { DownloadModelProgress } from "./AgentContext";
 import { FILL_WORDS } from "./constants";
 
@@ -33,10 +35,6 @@ export default function AgentContextProvider({
   const [mute, setMute] = useState<boolean>(true);
   const [jarvisActive, setJarvisActive] = useState<boolean>(false);
 
-  const [speakerAbortController, setSpeakerAbortController] = useState(
-    () => new AbortController()
-  );
-
   const speechToText = useMemo(() => new SpeechToText(), []);
   const tts = useMemo(() => new Kokoro(), []);
   const imageToText = useMemo(() => new ImageToText(), []);
@@ -45,6 +43,16 @@ export default function AgentContextProvider({
     tts.player.onIsPlayingChange,
     () => tts.player.isPlaying
   );
+
+  // Production-ready interruption system with voice commands, keyboard shortcuts, and VAD
+  const interruption = useInterruption({
+    enabled: true,
+    detectSpeechDuringPlayback: true,
+    detectVoiceCommands: true,
+    onInterrupt: (event) => {
+      console.log('[AgentContext] Interrupted:', event.reason);
+    },
+  });
 
   const conversation = useMemo(
     () =>
@@ -84,6 +92,14 @@ export default function AgentContextProvider({
     () => conversation.status
   );
 
+  // Automatic conversation persistence with IndexedDB (auto-saves every 2 seconds)
+  const persistence = useConversationPersistence(messages, {
+    enabled: true,
+    autoSaveDelay: 2000,
+    systemPrompt: SYSTEM_PROMPT,
+    mcpServers: activeMcpServers,
+  });
+
   const processPrompt = useCallback(
     async (
       message: MessageUser,
@@ -95,8 +111,11 @@ export default function AgentContextProvider({
   );
 
   const submit = useCallback(
-    (prompt: string) =>
-      processPrompt(
+    (prompt: string) => {
+      // Create new abort controller for this speech session
+      const controller = interruption.createNewController();
+
+      return processPrompt(
         {
           id: uuidv4(),
           messageParts: [
@@ -108,10 +127,10 @@ export default function AgentContextProvider({
           ],
           role: MessageRole.USER,
         },
-        (feedback) =>
-          !mute && tts.speak(feedback, speakerAbortController.signal)
-      ),
-    [processPrompt, tts, speakerAbortController.signal, mute]
+        (feedback) => !mute && tts.speak(feedback, controller.signal)
+      );
+    },
+    [processPrompt, tts, interruption, mute]
   );
 
   const vadListeners = useRef<Set<(text: string) => void>>(new Set());
@@ -130,13 +149,17 @@ export default function AgentContextProvider({
             const possibleFillWord =
               text.trim().startsWith("(") && text.trim().startsWith(")");
             if (!isFillWord && !possibleFillWord) {
+              // Handle transcription through interruption system (enables voice commands + auto-interrupt)
+              interruption.handleTranscription(text, isSpeaking);
+
+              // Notify other listeners
               vadListeners.current.forEach((callback) => callback(text));
             }
           });
       },
     });
     return vad;
-  }, [speechToText, vadListeners.current]);
+  }, [speechToText, interruption, isSpeaking]);
 
   const vadStatus = useExternalState<VoiceActivityDetectionStatus>(
     vad.onStatusChange,
@@ -206,8 +229,8 @@ export default function AgentContextProvider({
         setMute: (mute) => {
           setMute(mute);
           if (mute) {
-            speakerAbortController.abort();
-            setSpeakerAbortController(new AbortController());
+            // Use interruption system to stop speech
+            interruption.interrupt();
           }
         },
         isDeaf: vadStatus === VoiceActivityDetectionStatus.IDLE,

@@ -7,6 +7,7 @@ type LocalStorageCallback<T> = (
 class LocalStorageManager {
   private callbacks: Map<string, Set<LocalStorageCallback<any>>> = new Map();
   private values: Map<string, any> = new Map();
+  private storageHandler: ((event: StorageEvent) => void) | null = null;
 
   constructor() {
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -22,7 +23,9 @@ class LocalStorageManager {
       }
     }
 
-    window.addEventListener("storage", this.handleStorageEvent.bind(this));
+    // Store bound handler for cleanup
+    this.storageHandler = this.handleStorageEvent.bind(this);
+    window.addEventListener("storage", this.storageHandler);
   }
 
   private handleStorageEvent(event: StorageEvent) {
@@ -114,6 +117,24 @@ class LocalStorageManager {
     oldValues.forEach((oldValue, key) => {
       this.notifyCallbacks(key, null, oldValue);
     });
+  }
+
+  /**
+   * Cleanup resources and remove event listeners
+   * Call this before destroying to prevent memory leaks
+   */
+  destroy(): void {
+    // Remove storage event listener
+    if (this.storageHandler) {
+      window.removeEventListener("storage", this.storageHandler);
+      this.storageHandler = null;
+    }
+
+    // Clear all callbacks
+    this.callbacks.clear();
+    this.values.clear();
+
+    console.log('[LocalStorageManager] Destroyed and cleaned up resources');
   }
 }
 

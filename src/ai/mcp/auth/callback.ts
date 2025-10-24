@@ -186,20 +186,45 @@ export async function onMcpAuthorization() {
       // window.close();
     }
 
-    // Display error in the callback window
+    // Display error in the callback window - SAFE from XSS attacks
     try {
-      document.body.innerHTML = `
-            <div style="font-family: sans-serif; padding: 20px;">
-            <h1>Authentication Error</h1>
-            <p style="color: red; background-color: #ffebeb; border: 1px solid red; padding: 10px; border-radius: 4px;">
-                ${errorMessage}
-            </p>
-            <p>You can close this window or <a href="#" onclick="window.close(); return false;">click here to close</a>.</p>
-            <pre style="font-size: 0.8em; color: #555; margin-top: 20px; white-space: pre-wrap;">${
-              err instanceof Error ? err.stack : ""
-            }</pre>
-            </div>
-        `;
+      // Create DOM elements safely to prevent XSS
+      const container = document.createElement('div');
+      container.style.cssText = 'font-family: sans-serif; padding: 20px;';
+
+      const heading = document.createElement('h1');
+      heading.textContent = 'Authentication Error';
+      container.appendChild(heading);
+
+      const errorPara = document.createElement('p');
+      errorPara.style.cssText = 'color: red; background-color: #ffebeb; border: 1px solid red; padding: 10px; border-radius: 4px;';
+      errorPara.textContent = errorMessage; // textContent auto-escapes HTML
+      container.appendChild(errorPara);
+
+      const closePara = document.createElement('p');
+      closePara.textContent = 'You can close this window or ';
+      const closeLink = document.createElement('a');
+      closeLink.href = '#';
+      closeLink.textContent = 'click here to close';
+      closeLink.onclick = (e) => {
+        e.preventDefault();
+        window.close();
+        return false;
+      };
+      closePara.appendChild(closeLink);
+      closePara.appendChild(document.createTextNode('.'));
+      container.appendChild(closePara);
+
+      // Only show stack trace in development (security: don't expose internals in production)
+      if (err instanceof Error && err.stack && import.meta.env.DEV) {
+        const stackPre = document.createElement('pre');
+        stackPre.style.cssText = 'font-size: 0.8em; color: #555; margin-top: 20px; white-space: pre-wrap;';
+        stackPre.textContent = err.stack; // textContent auto-escapes
+        container.appendChild(stackPre);
+      }
+
+      document.body.innerHTML = '';
+      document.body.appendChild(container);
     } catch (displayError) {
       console.error(
         `${logPrefix} Could not display error in callback window:`,

@@ -59,6 +59,9 @@ class InterruptionManager {
   private interruptDebounceMs = 500;
   private lastInterruptTime = 0;
 
+  // Keyboard listener reference for cleanup
+  private keyboardHandler: ((event: KeyboardEvent) => void) | null = null;
+
   // Statistics for monitoring
   private stats = {
     totalInterruptions: 0,
@@ -227,7 +230,8 @@ class InterruptionManager {
   private setupKeyboardListeners(): void {
     if (typeof window === 'undefined') return;
 
-    window.addEventListener('keydown', (event) => {
+    // Store handler for cleanup
+    this.keyboardHandler = (event: KeyboardEvent) => {
       if (!this.isEnabled) return;
 
       // Don't trigger if user is typing in input
@@ -258,7 +262,9 @@ class InterruptionManager {
         this.resume();
         return;
       }
-    });
+    };
+
+    window.addEventListener('keydown', this.keyboardHandler);
   }
 
   /**
@@ -318,6 +324,29 @@ class InterruptionManager {
         [InterruptionReason.ERROR]: 0,
       },
     };
+  }
+
+  /**
+   * Cleanup resources and remove event listeners
+   * Call this before destroying the component to prevent memory leaks
+   */
+  destroy(): void {
+    // Remove keyboard listener
+    if (this.keyboardHandler && typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this.keyboardHandler);
+      this.keyboardHandler = null;
+    }
+
+    // Clear listeners
+    this.listeners.clear();
+
+    // Abort any active controllers
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
+    console.log('[InterruptionManager] Destroyed and cleaned up resources');
   }
 
   /**
