@@ -16,6 +16,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import isFullSentence from "@utils/isFullSentence";
 import isFullXMLToolCall from "@utils/isFullXMLToolCall";
 import errorHandler from "@utils/ErrorHandler";
+import tokenUsageTracker from "@utils/TokenUsageTracker";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ConversationGeminiOptions
@@ -412,6 +413,32 @@ Response: ${resp.response}`
 
       // If stream fails, return whatever we got so far
       console.error('[ConversationGemini] Stream processing error, returning partial response');
+    }
+
+    // Track token usage for cost monitoring
+    try {
+      const response = await result.response;
+      const usageMetadata = response.usageMetadata;
+
+      if (usageMetadata) {
+        await tokenUsageTracker.trackUsage(
+          usageMetadata.promptTokenCount || 0,
+          usageMetadata.candidatesTokenCount || 0,
+          this.modelName,
+          {
+            operation: 'gemini_generate_content',
+            component: 'ConversationGemini',
+            metadata: {
+              promptLength: prompt.length,
+              responseLength: reply.length,
+              totalTokens: usageMetadata.totalTokenCount,
+            },
+          }
+        );
+      }
+    } catch (trackingError) {
+      // Don't fail the request if tracking fails
+      console.error('[ConversationGemini] Token tracking failed:', trackingError);
     }
 
     return {
