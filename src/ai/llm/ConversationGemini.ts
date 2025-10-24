@@ -17,6 +17,7 @@ import isFullSentence from "@utils/isFullSentence";
 import isFullXMLToolCall from "@utils/isFullXMLToolCall";
 import errorHandler from "@utils/ErrorHandler";
 import tokenUsageTracker from "@utils/TokenUsageTracker";
+import telemetry from "@utils/TelemetryService";
 import { v4 as uuidv4 } from "uuid";
 
 export interface ConversationGeminiOptions
@@ -331,6 +332,10 @@ Response: ${resp.response}`
     let processedReply: string = "";
     const toolsToCall: Array<XMLToolSignature> = [];
 
+    // Start telemetry timer for API call performance tracking
+    const apiStartTime = performance.now();
+    let apiSuccess = true;
+
     //await new Promise((resolve) => window.setTimeout(resolve, 1000));
 
     // Use Gemini streaming with automatic retry on network errors, rate limits, and timeouts
@@ -411,6 +416,9 @@ Response: ${resp.response}`
         metadata: { model: this.modelName, partialReply: reply.substring(0, 100) },
       });
 
+      // Mark as failure for telemetry
+      apiSuccess = false;
+
       // If stream fails, return whatever we got so far
       console.error('[ConversationGemini] Stream processing error, returning partial response');
     }
@@ -439,6 +447,29 @@ Response: ${resp.response}`
     } catch (trackingError) {
       // Don't fail the request if tracking fails
       console.error('[ConversationGemini] Token tracking failed:', trackingError);
+    }
+
+    // Track API performance for telemetry
+    try {
+      const apiDuration = performance.now() - apiStartTime;
+
+      await telemetry.trackAPICall(
+        'gemini_generate_content',
+        apiDuration,
+        apiSuccess,
+        {
+          component: 'ConversationGemini',
+          metadata: {
+            model: this.modelName,
+            promptLength: prompt.length,
+            responseLength: reply.length,
+            toolsCallCount: toolsToCall.length,
+          },
+        }
+      );
+    } catch (telemetryError) {
+      // Don't fail the request if telemetry fails
+      console.error('[ConversationGemini] Telemetry tracking failed:', telemetryError);
     }
 
     return {
