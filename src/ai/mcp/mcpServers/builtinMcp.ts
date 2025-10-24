@@ -1,4 +1,4 @@
-import MemoriesServer from "@ai/mcp/mcpServers/MemoriesServer";
+import MemoriesServerEnhanced from "@ai/mcp/mcpServers/MemoriesServerEnhanced";
 import { McpServerStoreBuiltIn } from "@ai/types";
 
 import PromiseTransport from "../PromiseTransport";
@@ -15,7 +15,7 @@ export const defaultBuiltinServers: McpServerStoreBuiltIn[] = [
   {
     name: "Memories",
     serverType: "memories",
-    active: false,
+    active: true, // Enable by default to showcase new features
     activeTools: [],
     activePrompts: [],
   },
@@ -28,7 +28,7 @@ export const getBuiltInServerTransport = (
     case "take_picture":
       return new TakePictureServer().getTransport();
     case "memories":
-      return new MemoriesServer().getTransport();
+      return new MemoriesServerEnhanced().getTransport();
     default:
       throw new Error(`Unknown built-in server type: ${serverType}`);
   }
