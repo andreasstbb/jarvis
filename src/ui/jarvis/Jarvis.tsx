@@ -5,20 +5,14 @@ import {
   MessageRole,
   ModelStatus,
 } from "@ai/types";
+import detectWakeWord from "@ai/voiceActivityDetection/WakeWordDetector";
 import { LoadingDots } from "@theme";
+import { getWakeWordConfig } from "@utils/WakeWordConfig";
 import { useEffect, useRef, useState } from "preact/hooks";
 import toast from "react-hot-toast";
 
 import Rings from "./Rings";
 import ToolCallPopup from "./ToolCallPopup";
-
-const JARVIS_KEYWORDS = [
-  "charmus",
-  "jarvis",
-  "JARIFAS",
-  "Charmis",
-  "Jarmus",
-].map((s) => s.toLowerCase());
 
 export default function Jarvis({}: {}) {
   const {
@@ -71,15 +65,24 @@ export default function Jarvis({}: {}) {
         console.log("[ACTIVE_REQUEST]", text);
         setActiveRequest(text);
         submit(text).finally(() => setActiveRequest(""));
-      } else if (
-        JARVIS_KEYWORDS.some((word) => text.toLowerCase().includes(word))
-      ) {
-        setJarvisActive(true);
-        console.log("[ACTIVE_REQUEST]", text);
-        setActiveRequest(text);
-        submit(text).finally(() => setActiveRequest(""));
       } else {
-        console.log("[INACTIVE]", text);
+        // Use advanced wake word detection
+        const userConfig = getWakeWordConfig();
+        const result = detectWakeWord(text, userConfig || undefined);
+
+        if (result.detected) {
+          console.log(
+            `[WAKE_WORD_DETECTED] Keyword: "${result.matchedKeyword}", ` +
+            `Confidence: ${(result.confidence * 100).toFixed(1)}%, ` +
+            `Method: ${result.method}`
+          );
+          setJarvisActive(true);
+          console.log("[ACTIVE_REQUEST]", text);
+          setActiveRequest(text);
+          submit(text).finally(() => setActiveRequest(""));
+        } else {
+          console.log("[INACTIVE]", text);
+        }
       }
     });
     return () => {
